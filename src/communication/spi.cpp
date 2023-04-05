@@ -1,77 +1,90 @@
 #include "Arduino.h"
-#include "SPI.h"
+// #include "SPI.h"
 #include "esp_system.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include <memory>   // für std::unique_ptr
 #include <cstring>  // für std::memset
+#include <gsl/gsl>
+#include "driver/spi_common.h"
+#include "esp_console.h"
 
 #include "../include/communication/spi.h"
 
 #define PARALLEL_LINES 16
+#define LCD_HOST SPI2_HOST
+
+spi_device_handle_t spi_handle;
 
 Spi::Spi(uint8_t sck, uint8_t miso, uint8_t mosi, uint8_t cs) : SCK(sck), MISO(miso), MOSI(mosi), CS(cs) {
-    SPI.begin(SCK, MISO, MOSI, CS);
     esp_err_t ret;
-    spi_bus_config_t buscfg={
-        .mosi_io_num=MOSI,
-        .miso_io_num=MISO,
-        .sclk_io_num=SCK,
-        .quadwp_io_num=-1,
-        .quadhd_io_num=-1,
-        .max_transfer_sz=PARALLEL_LINES*320*2+8
-    };
+    spi_bus_config_t buscfg = {
+        .mosi_io_num     = mosi,
+        .miso_io_num     = miso,
+        .sclk_io_num     = sck,
+        .quadwp_io_num   = -1,
+        .quadhd_io_num   = -1,
+        .max_transfer_sz = PARALLEL_LINES * 320 * 2 + 8};
+
     spi_device_interface_config_t devcfg = {
-        .mode=0,                                //SPI mode 0
-        .clock_speed_hz=10*1000*1000,           //Clock out at 10 MHz
-        .spics_io_num=CS,                      //CS pin
-        .queue_size=7,                          //We want to be able to queue 7 transactions at a time
+        .mode           = 0,                 // SPI mode 0
+        .clock_speed_hz = 26 * 1000 * 1000,  // Clock out at 26 MHz
+        .spics_io_num   = cs,                // CS pin
+        .queue_size     = 16,                // We want to be able to queue 7 transactions at a time
+        .pre_cb         = NULL  // lcd_spi_pre_transfer_callback, // Specify pre-transfer callback to handle D/C line
     };
-//    //Initialize the SPI bus
-    ret=spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    // Initialize the SPI bus
+    ret = spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
     ESP_ERROR_CHECK(ret);
-    ret=spi_bus_add_device(SPI2_HOST, &devcfg, &spi);
+    // Attach the LCD to the SPI bus
+    ret = spi_bus_add_device(LCD_HOST, &devcfg, &spi_handle);
+    printf("spi handle nach bus add device: %p\n", spi_handle);
     ESP_ERROR_CHECK(ret);
 }
 
-
-void Spi::write(uint8_t data) {
-    SPI.write(data);
-//    spi_transaction_t transaction = {};
-//    transaction.length = 8;                   
-//    transaction.tx_buffer = &data;            
-//    spi_device_transmit(spi, &transaction);   
+spi_device_t* Spi::get_spi_handle() {
+    return spi_handle;
 }
 
-//void Spi::write_bytes(std::vector<uint8_t> data) {
-//    esp_err_t ret;
-//    static spi_transaction_t transaction[6];
-//    for(int i = 0; i < 6; ++i) {
-//        transaction[i].length = 8;                   
-//        transaction[i].tx_buffer = &data[i];            
-//    }
-//    for(int i=0; i<6; ++i) {
-//        ret=spi_device_queue_trans(spi, &transaction[i], 0xffffffffUL);
-//        assert(ret==ESP_OK);
-//    }
-//}
-void Spi::write_bytes(std::vector<uint8_t> data) {
-    SPI.writeBytes(data.data(), data.size());
-//    esp_err_t ret;
-//    std::vector<spi_transaction_t> transactions(data.size());
-//    for (int i = 0; i < data.size(); ++i) {
-//        transactions[i].length = 8;                   
-//        transactions[i].tx_buffer = &data[i];            
-//    }
-//    for (auto& transaction : transactions) {
-//        ret = spi_device_queue_trans(spi, &transaction, 0xffffffffUL);
-//        assert(ret == ESP_OK);
-//        Serial.write("spi ok");
-//    }
+void Spi::write(gsl::span<const uint8_t> data) {
+    if(data.size() == 0) {
+        return;
+    }
+    esp_err_t ret;
+    spi_transaction_t t;
+    memset(&t, 0, sizeof(t));                                   // Zero out the transaction
+    t.length    = data.size() * 8;                              // Command is 8 bits
+    t.tx_buffer = data.data();                                  // The data is the cmd itself
+    ret         = spi_device_polling_transmit(spi_handle, &t);  // Transmit!
+    assert(ret == ESP_OK);                                      // Should have had no issues
 }
 
-void Spi::select() {
+void Spi::get_transaction_result() {
+    spi_transaction_t* rtrans;
+    esp_err_t ret;
+    // Wait for all 6 transactions to be done and get back the results.
+    ret = spi_device_get_trans_result(spi_handle, &rtrans, portMAX_DELAY);
+    assert(ret == ESP_OK);
+    // We could inspect rtrans now if we received any info back. The LCD is treated as write-only, though.
 }
 
-void Spi::deselect() {
+void Spi::write_bytes(gsl::span<const uint8_t> data) {
+    assert(data.size() == 320 * 2 * PARALLEL_LINES);
+    esp_err_t ret;
+    // Transaction descriptors. Declared static so they're not allocated on the stack; we need this memory even when
+    // this function is finished because the SPI driver needs access to it even while we're already calculating the next
+    // line.
+    static spi_transaction_t trans;
+
+    // In theory, it's better to initialize trans and data only once and hang on to the initialized
+    // variables. We allocate them on the stack, so we need to re-init them each call.
+    memset(&trans, 0, sizeof(spi_transaction_t));
+    trans.flags     = SPI_TRANS_USE_TXDATA;
+    trans.tx_buffer = data.data();                   // finally send the line data
+    trans.length    = 320 * 2 * PARALLEL_LINES * 8;  // Data length, in bits
+    trans.flags     = 0;                             // undo SPI_TRANS_USE_TXDATA flag
+
+    // Queue all transactions.
+    ret = spi_device_queue_trans(spi_handle, &trans, portMAX_DELAY);
+    assert(ret == ESP_OK);
 }

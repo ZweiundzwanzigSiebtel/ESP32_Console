@@ -1,9 +1,10 @@
 #ifndef ABSTRACT_CONTROLLER_H
 #define ABSTRACT_CONTROLLER_H
 
-#include "../subscriber.h"
+#include "../game/subscriber.h"
 
 #include <vector>
+
 
 class AbstractController {
     public:
@@ -13,8 +14,6 @@ class AbstractController {
     virtual void notifyObservers() = 0;
     
     private:
-    //std::vector<Subscriber> &subscribers;
-
 };
 
 #endif

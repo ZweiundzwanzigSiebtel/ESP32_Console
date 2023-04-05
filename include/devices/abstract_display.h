@@ -12,8 +12,9 @@ class AbstractDisplay /*: public Device */{
     public:
     virtual ~AbstractDisplay() = default;
 
-    virtual void set_background_color(int color) = 0;
-    virtual void draw_pixel(Point point, int color) = 0;
+    virtual void update_screen() = 0;
+//    virtual void set_background_color(int color) = 0;
+//    virtual void draw_pixel(Point point, int color) = 0;
 };
 
 #endif

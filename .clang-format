@@ -1,9 +1,7 @@
 Language: Cpp
 BasedOnStyle: Google
-AccessModifierOffset: '-4'
+SpaceBeforeParens: Never
 AlignAfterOpenBracket: AlwaysBreak
-AlignConsecutiveAssignments: true
-AlignConsecutiveDeclarations: true
 AllowShortFunctionsOnASingleLine: InlineOnly
 AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
@@ -16,16 +14,5 @@ SpacesInContainerLiterals: true
 SpacesInCStyleCastParentheses: false
 SpacesInParentheses: false
 SpacesInSquareBrackets: false
-Standard: Cpp20
 TabWidth: '4'
 UseTab: Never
-
-# Naming conventions
-# Variables and functions in snake case
-# Classes in Camel Case
-# No space after if, while, for, etc.
-# Additions made to the Google naming style
-# Modified for no space after if/while/for/etc.
-NamingStyle: Google
-AllowLeadingUnderscore: false
-LowercaseHex: false
