@@ -2,19 +2,22 @@
 #define SCREEN_H
 #include "driver/spi_master.h"
 
+#include <gsl/gsl>
+
 class SpiDisplay {
    public:
     SpiDisplay();
     //~SpiDisplay() override;
-    void update_screen();
+    void render();
 
    private:
     spi_device_handle_t spi;
-    // uint8_t frame_buffer[320 * 240 * 2] = {0};
-    void send_block(uint8_t* linedata);
-    spi_device_handle_t begin();
     void lcd_init();
-    // void send_line_finish(spi_device_handle_t);
+    void send_lines(gsl::span<const uint8_t> linedata);
+    void send_line_finish();
+    void send_data(gsl::span<const uint8_t> data);
+    void send_command(const uint8_t cmd);
+    void send(gsl::span<const uint8_t> data);
 };
 
 #endif

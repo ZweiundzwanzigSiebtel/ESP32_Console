@@ -24,6 +24,6 @@ void app_main(void) {
     //    };
     //    esp_console_init(&console_config);
     SpiDisplay myClass;
-    myClass.update_screen();
+    myClass.render();
 }
 }

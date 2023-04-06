@@ -25,11 +25,7 @@
 // To speed up transfers, every SPI transfer sends a bunch of lines. This define
 // specifies how many. More means more memory use, but less overhead for setting
 // up / finishing transfers. Make sure 240 is dividable by this.
-#define PARALLEL_LINES 48
-static void send_line_finish(spi_device_handle_t spi);
-void lcd_cmd(spi_device_handle_t spi, const uint8_t cmd);
-void lcd_data(spi_device_handle_t spi, const uint8_t* data, int len);
-static void send_lines(spi_device_handle_t spi, uint8_t* linedata);
+#define PARALLEL_LINES 30
 void spi_write(spi_device_handle_t spi, const uint8_t* data, int len);
 
 /*
@@ -51,7 +47,7 @@ typedef enum {
 
 // Place data into DRAM. Constant data gets placed into DROM by default, which
 // is not accessible by DMA.
-DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[] = {
+DRAM_ATTR static const lcd_init_cmd_t lcd_init_cmds[] = {
     /* Power contorl B, power control = 0, DC_ENA = 1 */
     {0xCF, {0x00, 0x83, 0X30}, 3},
     /* Power on sequence control,
@@ -112,15 +108,31 @@ DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[] = {
 };
 
 SpiDisplay::SpiDisplay() {
-    spi = begin();
+    spi_device_interface_config_t devcfg = {
+        .mode = 0,                           // SPI mode 0
+        .clock_speed_hz = 26 * 1000 * 1000,  // Clock out at 26 MHz
+        .spics_io_num = PIN_NUM_CS,          // CS pin
+        .queue_size = 16,                    // We want to be able to queue 7 transactions at a time
+        .pre_cb = NULL                       // lcd_spi_pre_transfer_callback, // Specify
+                                             // pre-transfer callback to handle D/C line
+    };
+    spi_bus_config_t buscfg = {
+        .mosi_io_num = PIN_NUM_MOSI,
+        .miso_io_num = PIN_NUM_MISO,
+        .sclk_io_num = PIN_NUM_CLK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = PARALLEL_LINES * 320 * 2 + 8};
+    spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    spi_bus_add_device(LCD_HOST, &devcfg, &spi);
     lcd_init();
 }
 
-void SpiDisplay::update_screen() {
+void SpiDisplay::render() {
     uint8_t* lines[2];
     // Allocate memory for the pixel buffers
     for(int i = 0; i < 2; i++) {
-        lines[i] = (uint8_t*)heap_caps_malloc(320 * PARALLEL_LINES * 2 * sizeof(uint8_t), MALLOC_CAP_DMA);
+        lines[i] = static_cast<uint8_t*>(heap_caps_malloc(320 * PARALLEL_LINES * 2 * sizeof(uint8_t), MALLOC_CAP_DMA));
         assert(lines[i] != NULL);
     }
     int frame = 0;
@@ -140,30 +152,30 @@ void SpiDisplay::update_screen() {
                     lines[calc_line][i] = 0x00;
                     lines[calc_line][i + 1] = 0xFF;
                 } else {
-                    lines[calc_line][i] = 0xFF;
-                    lines[calc_line][i + 1] = 0x00;
+                    lines[calc_line][i] = 0x0F;
+                    lines[calc_line][i + 1] = 0xFF;
                 }
             }
             // Finish up the sending process of the previous line, if any
             if(sending_line != -1) {
-                send_line_finish(spi);
+                send_line_finish();
             }
             // Swap sending_line and calc_line
             sending_line = calc_line;
             calc_line = (calc_line == 1) ? 0 : 1;
             // Send the line we currently calculated.
-            lcd_cmd(spi, 0x2A);
+            send_command(0x2A);
             uint8_t data[4] = {0, 0, (320) >> 8, (320) & 0xff};
 
-            lcd_data(spi, data, 4);
+            send_data(gsl::make_span(data));
             //
-            lcd_cmd(spi, 0x2B);
+            send_command(0x2B);
             uint8_t datab[4] = {y >> 8, y & 0xff, (y + PARALLEL_LINES) >> 8, (y + PARALLEL_LINES) & 0xff};
-            lcd_data(spi, datab, 4);
+            send_data(gsl::make_span(datab));
             //
-            lcd_cmd(spi, 0x2C);
-            gpio_set_level((gpio_num_t)PIN_NUM_DC, 1);
-            send_lines(spi, lines[sending_line]);
+            send_command(0x2C);
+            gpio_set_level(static_cast<gpio_num_t>(PIN_NUM_DC), 1);
+            send_lines(gsl::make_span(lines[sending_line], 320 * PARALLEL_LINES * 2));
             // The line set is queued up for sending now; the actual sending
             // happens in the background. We can go on to calculate the next
             // line set as long as we do not touch line[sending_line]; the
@@ -174,13 +186,12 @@ void SpiDisplay::update_screen() {
 
 void SpiDisplay::lcd_init() {
     int cmd = 0;
-    const lcd_init_cmd_t* lcd_init_cmds = ili_init_cmds;
-
     // Initialize non-SPI GPIOs
-    gpio_config_t io_conf = {};
-    io_conf.pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | (1ULL << PIN_NUM_BCKL));
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pull_up_en = (gpio_pullup_t) true;
+    gpio_config_t io_conf = {
+        .pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | (1ULL << PIN_NUM_BCKL)),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = (gpio_pullup_t) true,
+    };
     gpio_config(&io_conf);
 
     // Reset the display
@@ -189,79 +200,15 @@ void SpiDisplay::lcd_init() {
     gpio_set_level((gpio_num_t)PIN_NUM_RST, 1);
     vTaskDelay(100 / portTICK_PERIOD_MS);
 
-    printf("LCD ILI9341 initialization.\n");
-    lcd_init_cmds = ili_init_cmds;
-
     // Send all the commands
     while(lcd_init_cmds[cmd].databytes != 0xff) {
-        lcd_cmd(spi, lcd_init_cmds[cmd].cmd);
-        lcd_data(spi, lcd_init_cmds[cmd].data, lcd_init_cmds[cmd].databytes & 0x1F);
+        send_command(lcd_init_cmds[cmd].cmd);
+        send_data(gsl::make_span(lcd_init_cmds[cmd].data, lcd_init_cmds[cmd].databytes & 0x1F));
         if(lcd_init_cmds[cmd].databytes & 0x80) {
             vTaskDelay(100 / portTICK_PERIOD_MS);
         }
         cmd++;
     }
-    /// Enable backlight
-    gpio_set_level((gpio_num_t)PIN_NUM_BCKL, 0);
-}
-
-spi_device_handle_t SpiDisplay::begin() {
-    spi_device_interface_config_t devcfg = {
-        .mode = 0,                           // SPI mode 0
-        .clock_speed_hz = 26 * 1000 * 1000,  // Clock out at 26 MHz
-        .spics_io_num = PIN_NUM_CS,          // CS pin
-        .queue_size = 16,                    // We want to be able to queue 7 transactions at a time
-        .pre_cb = NULL                       // lcd_spi_pre_transfer_callback, // Specify
-                                             // pre-transfer callback to handle D/C line
-    };
-    spi_bus_config_t buscfg = {
-        .mosi_io_num = PIN_NUM_MOSI,
-        .miso_io_num = PIN_NUM_MISO,
-        .sclk_io_num = PIN_NUM_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = PARALLEL_LINES * 320 * 2 + 8};
-    spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
-    spi_device_handle_t spi;
-    spi_bus_add_device(LCD_HOST, &devcfg, &spi);
-    return spi;
-}
-
-/* Send a command to the LCD. Uses spi_device_polling_transmit, which waits
- * until the transfer is complete.
- *
- * Since command transactions are usually small, they are handled in polling
- * mode for higher speed. The overhead of interrupt transactions is more than
- * just waiting for the transaction to complete.
- */
-void lcd_cmd(spi_device_handle_t spi, const uint8_t cmd) {
-    gpio_set_level((gpio_num_t)PIN_NUM_DC, 0);
-    spi_write(spi, &cmd, 1);
-}
-
-/* Send data to the LCD. Uses spi_device_polling_transmit, which waits until the
- * transfer is complete.
- *
- * Since data transactions are usually small, they are handled in polling
- * mode for higher speed. The overhead of interrupt transactions is more than
- * just waiting for the transaction to complete.
- */
-void lcd_data(spi_device_handle_t spi, const uint8_t* data, int len) {
-    gpio_set_level((gpio_num_t)PIN_NUM_DC, 1);
-    spi_write(spi, data, len);
-}
-
-void spi_write(spi_device_handle_t spi, const uint8_t data[], int len) {
-    if(len == 0) {
-        return;  // no need to send anything
-    }
-    esp_err_t ret;
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));                    // Zero out the transaction
-    t.length = len * 8;                          // Command is 8 bits
-    t.tx_buffer = data;                          // The data is the cmd itself
-    ret = spi_device_polling_transmit(spi, &t);  // Transmit!
-    assert(ret == ESP_OK);                       // Should have had no issues.
 }
 
 /* To send a set of lines we have to send a command, 2 data bytes, another
@@ -272,7 +219,7 @@ void spi_write(spi_device_handle_t spi, const uint8_t data[], int len) {
  * faster (compared to calling spi_device_transmit several times), and at the
  * mean while the lines for next transactions can get calculated.
  */
-static void send_lines(spi_device_handle_t spi, uint8_t* linedata) {
+void SpiDisplay::send_lines(gsl::span<const uint8_t> linedata) {
     esp_err_t ret;
     // Transaction descriptors. Declared static so they're not allocated on the
     // stack; we need this memory even when this function is finished because
@@ -285,9 +232,9 @@ static void send_lines(spi_device_handle_t spi, uint8_t* linedata) {
     // to re-init them each call.
     memset(&trans, 0, sizeof(spi_transaction_t));
     trans.flags = SPI_TRANS_USE_TXDATA;
-    trans.tx_buffer = linedata;                   // finally send the line data
-    trans.length = 320 * 2 * 8 * PARALLEL_LINES;  // Data length, in bits
-    trans.flags = 0;                              // undo SPI_TRANS_USE_TXDATA flag
+    trans.tx_buffer = linedata.data();   // finally send the line data
+    trans.length = linedata.size() * 8;  // 320 * 2 * 8 * PARALLEL_LINES;  // Data length, in bits
+    trans.flags = 0;                     // undo SPI_TRANS_USE_TXDATA flag
 
     // Queue all transactions.
     ret = spi_device_queue_trans(spi, &trans, portMAX_DELAY);
@@ -301,7 +248,7 @@ static void send_lines(spi_device_handle_t spi, uint8_t* linedata) {
     // transfers to be done and check their status.
 }
 
-static void send_line_finish(spi_device_handle_t spi) {
+void SpiDisplay::send_line_finish() {
     spi_transaction_t* rtrans;
     esp_err_t ret;
     // Wait for all 6 transactions to be done and get back the results.
@@ -309,4 +256,41 @@ static void send_line_finish(spi_device_handle_t spi) {
     assert(ret == ESP_OK);
     // We could inspect rtrans now if we received any info back. The LCD is
     // treated as write-only, though.
+}
+
+/* Send a command to the LCD. Uses spi_device_polling_transmit, which waits
+ * until the transfer is complete.
+ *
+ * Since command transactions are usually small, they are handled in polling
+ * mode for higher speed. The overhead of interrupt transactions is more than
+ * just waiting for the transaction to complete.
+ */
+void SpiDisplay::send_command(const uint8_t cmd) {
+    gpio_set_level(static_cast<gpio_num_t>(PIN_NUM_DC), 0);
+    send(gsl::make_span(&cmd, 1));
+}
+
+/* Send data to the LCD. Uses spi_device_polling_transmit, which waits until the
+ * transfer is complete.
+ *
+ * Since data transactions are usually small, they are handled in polling
+ * mode for higher speed. The overhead of interrupt transactions is more than
+ * just waiting for the transaction to complete.
+ */
+void SpiDisplay::send_data(gsl::span<const uint8_t> data) {
+    gpio_set_level(static_cast<gpio_num_t>(PIN_NUM_DC), 1);
+    send(data);
+}
+
+void SpiDisplay::send(gsl::span<const uint8_t> data) {
+    if(data.size() == 0) {
+        return;  // no need to send anything
+    }
+    esp_err_t ret;
+    spi_transaction_t t;
+    memset(&t, 0, sizeof(t));                    // Zero out the transaction
+    t.length = data.size() * 8;                  // Command is 8 bits
+    t.tx_buffer = data.data();                   // The data is the cmd itself
+    ret = spi_device_polling_transmit(spi, &t);  // Transmit!
+    assert(ret == ESP_OK);                       // Should have had no issues.
 }
