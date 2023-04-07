@@ -16,6 +16,8 @@ SpacesInParentheses: false
 SpacesInSquareBrackets: false
 TabWidth: '4'
 UseTab: Never
+ReflowComments: false
+AlignTrailingComments: false
 SortIncludes: CaseInsensitive
 IncludeCategories:
   - Regex:           '^<.*\.h>'
