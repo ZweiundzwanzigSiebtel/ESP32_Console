@@ -212,17 +212,20 @@ void SpiDisplay::lcd_init() {
 }
 
 void SpiDisplay::calculate_lines(gsl::span<uint16_t> allocated_area, int from_y) {
+    for(int i = from_y; i < from_y + PARALLEL_LINES; ++i) {
+        for(int j = 0; j < 320; ++j) {
+            allocated_area[(i - from_y) * 320 + j] = 0xF000;
+        }
+    }
     // if (a.start <= b.end && b.start <= a.end)
     auto check_intersection = [](const Sprite& sprite, int y) {
         return sprite.get_y_position() <= y + PARALLEL_LINES && y <= sprite.get_y_position() + sprite.get_height();
     };
     utils::for_each_if(
         sprites.begin(), sprites.end(),
-        [from_y, check_intersection](const Sprite& sprite) {
-            printf("intersection: %d \n", check_intersection(sprite, from_y));
-            return check_intersection(sprite, from_y);
-        },
+        [from_y, check_intersection](const Sprite& sprite) { return check_intersection(sprite, from_y); },
         [allocated_area, from_y](const Sprite& sprite) {
+            printf("from_y: %d\n", from_y);
             // TODO: for each of the sprites draw the relevant parts of the sprite into the framebuffer.
             int sprite_x = sprite.get_x_position();
             int sprite_y = sprite.get_y_position();

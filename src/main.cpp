@@ -25,8 +25,8 @@ void app_main(void) {
     //    };
     //    esp_console_init(&console_config);
     SpiDisplay myClass;
-    std::vector<uint16_t> pixel_data(9600, 0x0F0F);
-    Sprite a(gsl::make_span(pixel_data), 0, 0, 320, 30, 0xFFFF);
+    std::vector<uint16_t> pixel_data(8294, 0x0F0F);
+    Sprite a(gsl::make_span(pixel_data), 0, 15, 319, 26, 0xFFFF);
 
     myClass.add_sprite(a);
     myClass.render();
