@@ -1,17 +1,16 @@
 #include "../include/game/sprite.h"
 
 Sprite::Sprite(
-    gsl::span<const uint16_t> pixel_data, uint16_t x_position, uint16_t y_position, uint16_t width, uint16_t height,
+    gsl::span<const uint16_t> pixel_data, uint16_t x_position, uint16_t y_position, uint16_t z_value, uint16_t width, uint16_t height,
     uint16_t transparent_pixel)
     : pixel_data(pixel_data),
       x_position(x_position),
       y_position(y_position),
+      z_value(z_value),
       width(width),
       height(height),
       transparent_pixel(transparent_pixel) {
-    assert(pixel_data.size() == width * height); /*
-    { throw std::invalid_argument("Pixel data size does not match width and height"); }
-    */
+    Ensures(pixel_data.size() == width * height);
 }
 
 void Sprite::update_position(uint16_t x_position, uint16_t y_position) {
@@ -29,6 +28,10 @@ uint16_t Sprite::get_x_position() const {
 
 uint16_t Sprite::get_y_position() const {
     return y_position;
+}
+
+uint16_t Sprite::get_z_value() const {
+    return z_value;
 }
 
 uint16_t Sprite::get_width() const {

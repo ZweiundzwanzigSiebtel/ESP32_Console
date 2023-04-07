@@ -27,7 +27,7 @@
 // To speed up transfers, every SPI transfer sends a bunch of lines. This define
 // specifies how many. More means more memory use, but less overhead for setting
 // up / finishing transfers. Make sure 240 is dividable by this.
-#define PARALLEL_LINES 30
+#define PARALLEL_LINES 16
 
 /*
  The LCD needs a bunch of command/argument values to be initialized. They are
@@ -109,6 +109,10 @@ DRAM_ATTR static const lcd_init_cmd_t lcd_init_cmds[] = {
 };
 
 SpiDisplay::SpiDisplay() : sprites() {
+    for(int i = 0; i < 2; ++i) {
+        lines[i] = static_cast<uint16_t*>(heap_caps_malloc(320 * PARALLEL_LINES * sizeof(uint16_t), MALLOC_CAP_DMA));
+        assert(lines[i] != NULL);
+    }
     spi_device_interface_config_t devcfg = {
         .mode = 0,  // SPI mode 0
         .clock_speed_hz = 26 * 1000 * 1000,  // Clock out at 26 MHz
@@ -123,134 +127,79 @@ SpiDisplay::SpiDisplay() : sprites() {
         .sclk_io_num = PIN_NUM_CLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = PARALLEL_LINES * 320 * 2 + 8};
+        .max_transfer_sz = PARALLEL_LINES * 320 * 2 * 8};
     spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
     spi_bus_add_device(LCD_HOST, &devcfg, &spi);
     lcd_init();
 }
 
 void SpiDisplay::render() {
-    uint16_t* lines[2];
-    // Allocate memory for the pixel buffers
-    for(int i = 0; i < 2; i++) {
-        lines[i] = static_cast<uint16_t*>(heap_caps_malloc(320 * PARALLEL_LINES * sizeof(uint16_t), MALLOC_CAP_DMA));
-        assert(lines[i] != NULL);
-    }
-    int frame = 0;
     // Indexes of the line currently being sent to the LCD and the line
     // we're calculating.
     int sending_line = -1;
     int calc_line = 0;
 
-    for(int i = 0; i < 1; ++i) {
-        frame++;
-        for(int y = 0; y < 240; y += PARALLEL_LINES) {
-            // Calculate a line.
-            // pretty_effect_calc_lines(lines[calc_line], y, frame,
-            // PARALLEL_LINES);
-            calculate_lines(gsl::make_span(lines[calc_line], 320 * PARALLEL_LINES), y);
+    for(int y = 0; y <= 240; y += PARALLEL_LINES) {
+        // Calculate a line.
+        calculate_lines(gsl::make_span(lines[calc_line], 320 * PARALLEL_LINES), y);
 
-            // Finish up the sending process of the previous line, if any
-            if(sending_line != -1) {
-                send_line_finish();
+        // Finish up the sending process of the previous line, if any
+        if(sending_line != -1) {
+            send_line_finish();
+            if(y == 240) {
+                break;  // We're waiting for the last line to be sent.
             }
-            // Swap sending_line and calc_line
-            sending_line = calc_line;
-            calc_line = (calc_line == 1) ? 0 : 1;
-            // Send the line we currently calculated.
-            send_command(0x2A);
-            uint8_t data[4] = {0, 0, (320) >> 8, (320) & 0xff};
-            send_data(gsl::make_span(data));
-            //
-            send_command(0x2B);
-            uint8_t datab[4] = {y >> 8, y & 0xff, (y + PARALLEL_LINES) >> 8, (y + PARALLEL_LINES) & 0xff};
-            send_data(gsl::make_span(datab));
-            //
-            send_command(0x2C);
-            gpio_set_level(static_cast<gpio_num_t>(PIN_NUM_DC), 1);
-            send_lines(gsl::make_span(lines[sending_line], 320 * PARALLEL_LINES));
-            // The line set is queued up for sending now; the actual sending
-            // happens in the background. We can go on to calculate the next
-            // line set as long as we do not touch line[sending_line]; the
-            // SPI sending process is still reading from that.
         }
+        // Swap sending_line and calc_line
+        sending_line = calc_line;
+        calc_line = (calc_line == 1) ? 0 : 1;
+        // Send the line we currently calculated.
+        send_command(0x2A);
+        uint8_t data[4] = {0, 0, (320) >> 8, (320) & 0xff};
+        send_data(gsl::make_span(data));
+        //
+        send_command(0x2B);
+        uint8_t datab[4] = {y >> 8, y & 0xff, (y + PARALLEL_LINES) >> 8, (y + PARALLEL_LINES) & 0xff};
+        send_data(gsl::make_span(datab));
+        //
+        send_command(0x2C);
+        gpio_set_level(static_cast<gpio_num_t>(PIN_NUM_DC), 1);
+        send_lines(gsl::make_span(lines[sending_line], 320 * PARALLEL_LINES));
+        // The line set is queued up for sending now; the actual sending
+        // happens in the background. We can go on to calculate the next
+        // line set as long as we do not touch line[sending_line]; the
+        // SPI sending process is still reading from that.
     }
 }
 
-void SpiDisplay::add_sprite(const Sprite& sprite) {
+void SpiDisplay::add_sprite(Sprite& sprite) {
     sprites.push_back(sprite);
-    std::sort(sprites.begin(), sprites.end(), [](const Sprite& s1, const Sprite& s2) {
-        return s1.get_y_position() < s2.get_y_position();
-    });
+    std::sort(sprites.begin(), sprites.end(), [](const Sprite& a, const Sprite& b) { return a.get_z_value() < b.get_z_value(); });
 }
 
-void SpiDisplay::lcd_init() {
-    int cmd = 0;
-    // Initialize non-SPI GPIOs
-    gpio_config_t io_conf = {
-        .pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | (1ULL << PIN_NUM_BCKL)),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = (gpio_pullup_t) true,
+void SpiDisplay::calculate_lines(gsl::span<uint16_t> allocated_area, uint16_t from_y) {
+    auto check_intersection = [from_y](const Sprite& sprite) {
+        return sprite.get_y_position() <= from_y + PARALLEL_LINES && from_y <= sprite.get_y_position() + sprite.get_height();
     };
-    gpio_config(&io_conf);
-
-    // Reset the display
-    gpio_set_level((gpio_num_t)PIN_NUM_RST, 0);
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-    gpio_set_level((gpio_num_t)PIN_NUM_RST, 1);
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-
-    // Send all the commands
-    while(lcd_init_cmds[cmd].databytes != 0xff) {
-        send_command(lcd_init_cmds[cmd].cmd);
-        send_data(gsl::make_span(lcd_init_cmds[cmd].data, lcd_init_cmds[cmd].databytes & 0x1F));
-        if(lcd_init_cmds[cmd].databytes & 0x80) {
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-        }
-        cmd++;
+    for(int i = 0; i < allocated_area.size(); ++i) {
+        allocated_area[i] = 0xF00F;
     }
-}
-
-void SpiDisplay::calculate_lines(gsl::span<uint16_t> allocated_area, int from_y) {
-    for(int i = from_y; i < from_y + PARALLEL_LINES; ++i) {
-        for(int j = 0; j < 320; ++j) {
-            allocated_area[(i - from_y) * 320 + j] = 0xF000;
-        }
-    }
-    // if (a.start <= b.end && b.start <= a.end)
-    auto check_intersection = [](const Sprite& sprite, int y) {
-        return sprite.get_y_position() <= y + PARALLEL_LINES && y <= sprite.get_y_position() + sprite.get_height();
-    };
-    utils::for_each_if(
-        sprites.begin(), sprites.end(),
-        [from_y, check_intersection](const Sprite& sprite) { return check_intersection(sprite, from_y); },
-        [allocated_area, from_y](const Sprite& sprite) {
-            printf("from_y: %d\n", from_y);
-            // TODO: for each of the sprites draw the relevant parts of the sprite into the framebuffer.
-            int sprite_x = sprite.get_x_position();
-            int sprite_y = sprite.get_y_position();
+    for(auto& sprite : sprites) {
+        if(check_intersection(sprite)) {
+            int sprite_x = sprite.get().get_x_position();
+            int sprite_y = sprite.get().get_y_position();
             for(int y = from_y; y < from_y + PARALLEL_LINES; ++y) {
+                int row_offset = (y - sprite_y) * sprite.get().get_width();
                 for(int x = 0; x < 320; ++x) {
-                    if(sprite_x <= x && x < sprite_x + sprite.get_width() && sprite_y <= y &&
-                       y < sprite_y + sprite.get_height()) {
-                        allocated_area[(y - from_y) * 320 + x] =
-                            sprite.get_pixel_data()[(y - sprite_y) * sprite.get_width() + (x - sprite_x)];
+                    if(sprite_x <= x && x < sprite_x + sprite.get().get_width() && sprite_y <= y && y < sprite_y + sprite.get().get_height()) {
+                        allocated_area[(y - from_y) * 320 + x] = sprite.get().get_pixel_data()[row_offset + (x - sprite_x)];
                     } else {
-                        allocated_area[(y - from_y) * 320 + x] = 0xF000;
+                        allocated_area[(y - from_y) * 320 + x] = 0xF00F;  //render background
                     }
                 }
             }
-        });
-    //            for(int y = std::max(sprite_y, 0); y < std::min(sprite_y + sprite.get_height(), 16 /*= PARALLEL_LINES*/);
-    //                ++y) {
-    //                for(int x = std::max(sprite_x, 0); x < std::min(sprite_x + sprite.get_width(), 320); x++) {
-    //                    printf("Koordinaten allocated_area: %d\n", (y - from_y) * 320 + x);
-    //                    uint16_t* pixel = &allocated_area[((y - from_y) * 320 + x)];
-    //                    printf("Koordinaten sprite: (%d, %d)\n", y - sprite_y, x - sprite_x);
-    //                    *pixel = sprite.get_pixel_data()[(y - sprite_y) * sprite.get_width() + (x - sprite_x)];
-    //                }
-    //            }
-    //        });
+        }
+    }
 }
 
 /* To send a set of lines we have to send a command, 2 data bytes, another
@@ -298,6 +247,33 @@ void SpiDisplay::send_line_finish() {
     assert(ret == ESP_OK);
     // We could inspect rtrans now if we received any info back. The LCD is
     // treated as write-only, though.
+}
+
+void SpiDisplay::lcd_init() {
+    int cmd = 0;
+    // Initialize non-SPI GPIOs
+    gpio_config_t io_conf = {
+        .pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | (1ULL << PIN_NUM_BCKL)),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = (gpio_pullup_t) true,
+    };
+    gpio_config(&io_conf);
+
+    // Reset the display
+    gpio_set_level((gpio_num_t)PIN_NUM_RST, 0);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    gpio_set_level((gpio_num_t)PIN_NUM_RST, 1);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+
+    // Send all the commands
+    while(lcd_init_cmds[cmd].databytes != 0xff) {
+        send_command(lcd_init_cmds[cmd].cmd);
+        send_data(gsl::make_span(lcd_init_cmds[cmd].data, lcd_init_cmds[cmd].databytes & 0x1F));
+        if(lcd_init_cmds[cmd].databytes & 0x80) {
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+        }
+        cmd++;
+    }
 }
 
 /* Send a command to the LCD. Uses spi_device_polling_transmit, which waits

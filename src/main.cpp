@@ -25,10 +25,13 @@ void app_main(void) {
     //    };
     //    esp_console_init(&console_config);
     SpiDisplay myClass;
-    std::vector<uint16_t> pixel_data(8294, 0x0F0F);
-    Sprite a(gsl::make_span(pixel_data), 0, 15, 319, 26, 0xFFFF);
+    std::vector<uint16_t> pixel_data(100, 0x0000);
+    Sprite a(gsl::make_span(pixel_data), 0, 0, 0, 10, 10, 0x00FF);
 
     myClass.add_sprite(a);
-    myClass.render();
+    for(int i = 0; i < 240; i += 2) {
+        a.update_position(i, i);
+        myClass.render();
+    }
 }
 }

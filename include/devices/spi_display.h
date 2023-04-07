@@ -22,14 +22,15 @@ class SpiDisplay {
      * @param sprite The sprite to add
      * @note The sprites are sorted based on their y position. Sprites with a lower y position are rendered first.
      */
-    void add_sprite(const Sprite& sprite);
+    void add_sprite(Sprite& sprite);
 
    private:
     spi_device_handle_t spi;
-    std::vector<Sprite> sprites;
+    std::vector<std::reference_wrapper<Sprite>> sprites;
+    uint16_t* lines[2];
 
     void lcd_init();
-    void calculate_lines(gsl::span<uint16_t> allocated_area, int from_y);
+    void calculate_lines(gsl::span<uint16_t> allocated_area, uint16_t from_y);
     void send_lines(gsl::span<const uint16_t> linedata);
     void send_line_finish();
     void send_data(gsl::span<const uint8_t> data);
