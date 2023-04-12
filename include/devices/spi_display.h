@@ -6,6 +6,7 @@
 
 #include <gsl/gsl>
 #include <vector>
+#include <array>
 
 class SpiDisplay {
    public:
@@ -27,7 +28,7 @@ class SpiDisplay {
    private:
     spi_device_handle_t spi;
     std::vector<std::reference_wrapper<Sprite>> sprites;
-    uint16_t* lines[2];
+    std::array<uint16_t*, 2> lines;
     const int height;
     const int width;
 

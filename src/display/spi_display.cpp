@@ -110,9 +110,9 @@ DRAM_ATTR static const lcd_init_cmd_t lcd_init_cmds[] = {
 
 SpiDisplay::SpiDisplay(int height, int width) : sprites(), height(height), width(width) {
     Expects(height > 0 && width > 0 && width >= height);
-    for(int i = 0; i < 2; ++i) {
-        lines[i] = static_cast<uint16_t*>(heap_caps_malloc(width * PARALLEL_LINES * sizeof(uint16_t), MALLOC_CAP_DMA));
-        assert(lines[i] != NULL);
+    for(auto& line : lines) {
+        line = static_cast<uint16_t*>(heap_caps_malloc(width * PARALLEL_LINES * sizeof(uint16_t), MALLOC_CAP_DMA));
+        assert(line != NULL);
     }
     spi_device_interface_config_t devcfg = {
         .mode = 0,  // SPI mode 0
