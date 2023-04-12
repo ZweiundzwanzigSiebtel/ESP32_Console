@@ -24,7 +24,7 @@ void app_main(void) {
     //        .max_cmdline_args = 8,
     //    };
     //    esp_console_init(&console_config);
-    SpiDisplay myClass;
+    SpiDisplay myClass(240, 320);
     std::vector<uint16_t> pixel_data(100, 0x0000);
     Sprite a(gsl::make_span(pixel_data), 0, 0, 0, 10, 10, 0x00FF);
 

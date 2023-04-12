@@ -26,7 +26,7 @@
 
 // To speed up transfers, every SPI transfer sends a bunch of lines. This define
 // specifies how many. More means more memory use, but less overhead for setting
-// up / finishing transfers. Make sure 240 is dividable by this.
+// up / finishing transfers. Make sure height is dividable by this.
 #define PARALLEL_LINES 16
 
 /*
@@ -108,9 +108,9 @@ DRAM_ATTR static const lcd_init_cmd_t lcd_init_cmds[] = {
     {0, {0}, 0xff},
 };
 
-SpiDisplay::SpiDisplay() : sprites() {
+SpiDisplay::SpiDisplay(int height, int width) : sprites(), height(height), width(width) {
     for(int i = 0; i < 2; ++i) {
-        lines[i] = static_cast<uint16_t*>(heap_caps_malloc(320 * PARALLEL_LINES * sizeof(uint16_t), MALLOC_CAP_DMA));
+        lines[i] = static_cast<uint16_t*>(heap_caps_malloc(width * PARALLEL_LINES * sizeof(uint16_t), MALLOC_CAP_DMA));
         assert(lines[i] != NULL);
     }
     spi_device_interface_config_t devcfg = {
@@ -127,7 +127,7 @@ SpiDisplay::SpiDisplay() : sprites() {
         .sclk_io_num = PIN_NUM_CLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = PARALLEL_LINES * 320 * 2 * 8};
+        .max_transfer_sz = PARALLEL_LINES * width * 2 * 8};
     spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
     spi_bus_add_device(LCD_HOST, &devcfg, &spi);
     lcd_init();
@@ -139,14 +139,14 @@ void SpiDisplay::render() {
     int sending_line = -1;
     int calc_line = 0;
 
-    for(int y = 0; y <= 240; y += PARALLEL_LINES) {
+    for(int y = 0; y <= height; y += PARALLEL_LINES) {
         // Calculate a line.
-        calculate_lines(gsl::make_span(lines[calc_line], 320 * PARALLEL_LINES), y);
+        calculate_lines(gsl::make_span(lines[calc_line], width * PARALLEL_LINES), y);
 
         // Finish up the sending process of the previous line, if any
         if(sending_line != -1) {
             send_line_finish();
-            if(y == 240) {
+            if(y == height) {
                 break;  // We're waiting for the last line to be sent.
             }
         }
@@ -155,7 +155,7 @@ void SpiDisplay::render() {
         calc_line = (calc_line == 1) ? 0 : 1;
         // Send the line we currently calculated.
         send_command(0x2A);
-        uint8_t data[4] = {0, 0, (320) >> 8, (320) & 0xff};
+        uint8_t data[4] = {0, 0, (width) >> 8, (width) & 0xff};
         send_data(gsl::make_span(data));
         //
         send_command(0x2B);
@@ -164,7 +164,7 @@ void SpiDisplay::render() {
         //
         send_command(0x2C);
         gpio_set_level(static_cast<gpio_num_t>(PIN_NUM_DC), 1);
-        send_lines(gsl::make_span(lines[sending_line], 320 * PARALLEL_LINES));
+        send_lines(gsl::make_span(lines[sending_line], width * PARALLEL_LINES));
         // The line set is queued up for sending now; the actual sending
         // happens in the background. We can go on to calculate the next
         // line set as long as we do not touch line[sending_line]; the
@@ -190,11 +190,11 @@ void SpiDisplay::calculate_lines(gsl::span<uint16_t> allocated_area, uint16_t fr
             int sprite_y = sprite.get().get_y_position();
             for(int y = from_y; y < from_y + PARALLEL_LINES; ++y) {
                 int row_offset = (y - sprite_y) * sprite.get().get_width();
-                for(int x = 0; x < 320; ++x) {
+                for(int x = 0; x < width; ++x) {
                     if(sprite_x <= x && x < sprite_x + sprite.get().get_width() && sprite_y <= y && y < sprite_y + sprite.get().get_height()) {
-                        allocated_area[(y - from_y) * 320 + x] = sprite.get().get_pixel_data()[row_offset + (x - sprite_x)];
+                        allocated_area[(y - from_y) * width + x] = sprite.get().get_pixel_data()[row_offset + (x - sprite_x)];
                     } else {
-                        allocated_area[(y - from_y) * 320 + x] = 0xF00F;  //render background
+                        allocated_area[(y - from_y) * width + x] = 0xF00F;  //render background
                     }
                 }
             }
@@ -224,7 +224,7 @@ void SpiDisplay::send_lines(gsl::span<const uint16_t> linedata) {
     memset(&trans, 0, sizeof(spi_transaction_t));
     trans.flags = SPI_TRANS_USE_TXDATA;
     trans.tx_buffer = linedata.data();  // finally send the line data
-    trans.length = linedata.size() * 16;  // 320 * 2 * 8 * PARALLEL_LINES;  // Data length, in bits
+    trans.length = linedata.size() * 16;  // width * 2 * 8 * PARALLEL_LINES;  // Data length, in bits
     trans.flags = 0;  // undo SPI_TRANS_USE_TXDATA flag
 
     // Queue all transactions.

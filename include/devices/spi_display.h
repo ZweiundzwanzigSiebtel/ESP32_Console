@@ -9,7 +9,7 @@
 
 class SpiDisplay {
    public:
-    SpiDisplay();
+    SpiDisplay(int height, int width);
     //~SpiDisplay() override;
     /**
      * @brief Render all sprites that were added with SpiDisplay::add_sprite()
@@ -28,6 +28,8 @@ class SpiDisplay {
     spi_device_handle_t spi;
     std::vector<std::reference_wrapper<Sprite>> sprites;
     uint16_t* lines[2];
+    const int height;
+    const int width;
 
     void lcd_init();
     void calculate_lines(gsl::span<uint16_t> allocated_area, uint16_t from_y);
