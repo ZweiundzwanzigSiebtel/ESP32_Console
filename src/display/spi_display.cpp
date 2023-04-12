@@ -182,8 +182,8 @@ void SpiDisplay::calculate_lines(gsl::span<uint16_t> allocated_area, uint16_t fr
     auto check_intersection = [from_y](const Sprite& sprite) {
         return sprite.get_y_position() <= from_y + PARALLEL_LINES && from_y <= sprite.get_y_position() + sprite.get_height();
     };
-    for(int i = 0; i < allocated_area.size(); ++i) {
-        allocated_area[i] = 0xF00F;
+    for(auto& element : allocated_area) {
+        element = 0xF00F;
     }
     for(auto& sprite : sprites) {
         if(check_intersection(sprite)) {
