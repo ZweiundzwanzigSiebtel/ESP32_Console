@@ -109,6 +109,7 @@ DRAM_ATTR static const lcd_init_cmd_t lcd_init_cmds[] = {
 };
 
 SpiDisplay::SpiDisplay(int height, int width) : sprites(), height(height), width(width) {
+    Expects(height > 0 && width > 0 && width >= height);
     for(int i = 0; i < 2; ++i) {
         lines[i] = static_cast<uint16_t*>(heap_caps_malloc(width * PARALLEL_LINES * sizeof(uint16_t), MALLOC_CAP_DMA));
         assert(lines[i] != NULL);
@@ -155,7 +156,7 @@ void SpiDisplay::render() {
         calc_line = (calc_line == 1) ? 0 : 1;
         // Send the line we currently calculated.
         send_command(0x2A);
-        uint8_t data[4] = {0, 0, (width) >> 8, (width) & 0xff};
+        uint8_t data[4] = {0, 0, (width) >> 8, (width)&0xff};
         send_data(gsl::make_span(data));
         //
         send_command(0x2B);
