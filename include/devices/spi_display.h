@@ -27,7 +27,7 @@ class SpiDisplay {
 
    private:
     spi_device_handle_t spi;
-    std::vector<std::reference_wrapper<Sprite>> sprites;
+    std::vector<Sprite*> sprites;
     std::array<uint16_t*, 2> lines;
     const int height;
     const int width;

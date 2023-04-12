@@ -174,8 +174,8 @@ void SpiDisplay::render() {
 }
 
 void SpiDisplay::add_sprite(Sprite& sprite) {
-    sprites.push_back(sprite);
-    std::sort(sprites.begin(), sprites.end(), [](const Sprite& a, const Sprite& b) { return a.get_z_value() < b.get_z_value(); });
+    sprites.push_back(&sprite);
+    std::sort(sprites.begin(), sprites.end(), [](const Sprite* a, const Sprite* b) { return a->get_z_value() < b->get_z_value(); });
 }
 
 void SpiDisplay::calculate_lines(gsl::span<uint16_t> allocated_area, uint16_t from_y) {
@@ -185,15 +185,15 @@ void SpiDisplay::calculate_lines(gsl::span<uint16_t> allocated_area, uint16_t fr
     for(auto& element : allocated_area) {
         element = 0xF00F;
     }
-    for(auto& sprite : sprites) {
-        if(check_intersection(sprite)) {
-            int sprite_x = sprite.get().get_x_position();
-            int sprite_y = sprite.get().get_y_position();
+    for(auto* sprite : sprites) {
+        if(check_intersection(*sprite)) {
+            int sprite_x = sprite->get_x_position();
+            int sprite_y = sprite->get_y_position();
             for(int y = from_y; y < from_y + PARALLEL_LINES; ++y) {
-                int row_offset = (y - sprite_y) * sprite.get().get_width();
+                int row_offset = (y - sprite_y) * sprite->get_width();
                 for(int x = 0; x < width; ++x) {
-                    if(sprite_x <= x && x < sprite_x + sprite.get().get_width() && sprite_y <= y && y < sprite_y + sprite.get().get_height()) {
-                        allocated_area[(y - from_y) * width + x] = sprite.get().get_pixel_data()[row_offset + (x - sprite_x)];
+                    if(sprite_x <= x && x < sprite_x + sprite->get_width() && sprite_y <= y && y < sprite_y + sprite->get_height()) {
+                        allocated_area[(y - from_y) * width + x] = sprite->get_pixel_data()[row_offset + (x - sprite_x)];
                     } else {
                         allocated_area[(y - from_y) * width + x] = 0xF00F;  //render background
                     }
